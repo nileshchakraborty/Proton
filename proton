@@ -540,14 +540,8 @@ class Proton:
             self.wine_bin = self.bin_dir + "wine"
             self.wineserver_bin = self.bin_dir + "wineserver"
 
-        if g_platform_backend.name == "macos" and not file_exists(self.wine_bin, follow_symlinks=True):
-            tmp_wine_dir = "/private/tmp/proton-wine-build.s3SP6Z"
-            if file_exists(tmp_wine_dir + "/wine", follow_symlinks=True):
-                self.bin_dir = tmp_wine_dir + "/tools/wine:" + tmp_wine_dir + "/server"
-                self.wine_bin = tmp_wine_dir + "/wine"
-                self.wineserver_bin = tmp_wine_dir + "/server/wineserver"
-                if file_exists(tmp_wine_dir + "/loader/wine.inf", follow_symlinks=True):
-                    self.wine_inf = tmp_wine_dir + "/loader/wine.inf"
+        if g_platform_backend.name == "macos":
+            pass
 
     def path(self, d):
         return self.base_dir + d
@@ -1544,12 +1538,7 @@ class Session:
         if ld_library_path:
             prepend_to_env_str(self.env, ld_path_var, ':'.join(ld_library_path), ":")
 
-        dllpaths = []
-        if g_platform_backend.name == "macos":
-            dev_dll_path = "/private/tmp/proton-wine-build.s3SP6Z/dlls"
-            if file_exists(dev_dll_path, follow_symlinks=True):
-                dllpaths.append(dev_dll_path)
-        dllpaths.extend([g_proton.lib_dir + "vkd3d", g_proton.lib_dir + "wine"])
+        dllpaths = [g_proton.lib_dir + "vkd3d", g_proton.lib_dir + "wine"]
         if "WINEDLLPATH" in os.environ:
             dllpaths.append(os.environ["WINEDLLPATH"])
         self.env["WINEDLLPATH"] = ':'.join(dllpaths)
