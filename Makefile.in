@@ -83,7 +83,11 @@ ARCHS := i386-windows x86_64-windows
 TARGET_ARCH ?= x86_64
 
 ifeq ($(TARGET_OS),macos)
-	ARCHS += x86_64-darwin
+	ifeq ($(TARGET_ARCH),arm64)
+		ARCHS += arm64-darwin aarch64-windows arm64ec-windows
+	else
+		ARCHS += x86_64-darwin
+	endif
 else ifeq ($(TARGET_ARCH),x86_64)
 	ARCHS += i386-unix x86_64-unix
 else ifeq ($(TARGET_ARCH),arm64)
@@ -93,6 +97,7 @@ else
 endif
 
 unix_ARCHS = $(subst -unix,,$(filter %-unix,$(ARCHS)))
+darwin_ARCHS = $(subst -darwin,,$(filter %-darwin,$(ARCHS)))
 windows_ARCHS = $(subst -windows,,$(filter %-windows,$(ARCHS)))
 
 BASE_SOURCE_DATE_EPOCH ?= $(SOURCE_DATE_EPOCH)
@@ -862,7 +867,7 @@ $(OBJ)/.vkd3d-proton-post-source:
 ## FEX
 ##
 
-ifneq ($(findstring aarch64,$(unix_ARCHS)),)
+ifneq ($(filter aarch64 arm64,$(unix_ARCHS) $(darwin_ARCHS)),)
 FEX_CMAKE_ARGS = \
   -DENABLE_FEXCORE_PROFILER=True -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=False \
   -DBUILD_TESTING=False -DTUNE_CPU=none \
@@ -1345,10 +1350,10 @@ default_pfx: wine gst_good gst_bad gst_libav gst_plugins_rs lsteamclient steamex
 	find $(DST_LIBDIR)/wine -type f -execdir chmod a-w '{}' '+'
 	rm -rf $(abspath $(DIST_PREFIX))
 	rm -rf $(abspath $(DIST_PREFIX_ARM64))
-ifneq ($(findstring x86_64,$(unix_ARCHS)),)
+ifneq ($(findstring x86_64,$(unix_ARCHS) $(darwin_ARCHS)),)
 	python3 $(SRCDIR)/default_pfx.py $(abspath $(DIST_PREFIX)) $(abspath $(DST_DIR)) 0
 endif
-ifneq ($(findstring aarch64,$(unix_ARCHS)),)
+ifneq ($(filter aarch64 arm64,$(unix_ARCHS) $(darwin_ARCHS)),)
 	python3 $(SRCDIR)/default_pfx.py $(abspath $(DIST_PREFIX_ARM64)) $(abspath $(DST_DIR)) 1
 endif
 
