@@ -33,7 +33,7 @@ jobs:
       - name: Install Build Dependencies via Homebrew
         run: |
           brew update || true
-          brew install mingw-w64 bison molten-vk rsync
+          brew install mingw-w64 bison molten-vk rsync cmake ninja
 
       - name: Configure macOS Target
         run: |
