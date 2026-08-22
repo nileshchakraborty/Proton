@@ -1,0 +1,420 @@
+From 6937ddcae033c95180031e93271cd2c0e45c4063 Mon Sep 17 00:00:00 2001
+From: Nilesh Chakraborty <nileshchakraborty@gmail.com>
+Date: Thu, 20 Aug 2026 22:45:12 -0700
+Subject: [PATCH 1/5] wine: macOS Rosetta 2 compatibility and build fixes
+
+---
+ dlls/amd_ags_x64/unixlib.c                    | 25 ++++++++++++++++---
+ dlls/ntdll/unix/fsync.c                       | 16 ++++++++++++
+ dlls/ntdll/unix/loader.c                      |  8 +++++-
+ dlls/ntdll/unix/ntsync_tmp.h                  | 10 ++++++++
+ dlls/ntdll/unix/signal_x86_64.c               | 12 ++++++++-
+ dlls/ntdll/unix/sync.c                        |  2 ++
+ dlls/ntdll/unix/system.c                      | 11 +++++++-
+ dlls/win32u/opengl.c                          | 23 +++++++++++++++++
+ .../media-converter/media-converter.h         |  1 +
+ loader/preloader_mac.c                        | 24 ++++++++++++------
+ loader64/Makefile.in                          | 13 +++++++---
+ server/fsync.c                                |  5 ++++
+ server/ntsync_tmp.h                           | 10 ++++++++
+ 13 files changed, 142 insertions(+), 18 deletions(-)
+
+diff --git a/dlls/amd_ags_x64/unixlib.c b/dlls/amd_ags_x64/unixlib.c
+index d34a162b55c..6a52ac87f1b 100644
+--- a/dlls/amd_ags_x64/unixlib.c
++++ b/dlls/amd_ags_x64/unixlib.c
+@@ -31,9 +31,11 @@
+ #include <fcntl.h>
+ #include <errno.h>
+ 
+-#include <xf86drm.h>
+-#include <amdgpu_drm.h>
+-#include <amdgpu.h>
++#ifdef __linux__
++# include <xf86drm.h>
++# include <amdgpu_drm.h>
++# include <amdgpu.h>
++#endif
+ 
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+@@ -46,6 +48,8 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(amd_ags);
+ 
++#ifdef __linux__
++
+ #define MAX_DEVICE_COUNT 64
+ 
+ static unsigned int device_count;
+@@ -276,6 +280,21 @@ static NTSTATUS get_device_info( void *args )
+     return STATUS_NOT_FOUND;
+ }
+ 
++#else
++
++static NTSTATUS init( void *args )
++{
++    WARN("AMD AGS device discovery requires the Linux DRM subsystem.\n");
++    return STATUS_NOT_SUPPORTED;
++}
++
++static NTSTATUS get_device_info( void *args )
++{
++    return STATUS_NOT_FOUND;
++}
++
++#endif
++
+ const unixlib_entry_t __wine_unix_call_funcs[] =
+ {
+     init,
+diff --git a/dlls/ntdll/unix/fsync.c b/dlls/ntdll/unix/fsync.c
+index 25d41cac793..8275cd6a6cc 100644
+--- a/dlls/ntdll/unix/fsync.c
++++ b/dlls/ntdll/unix/fsync.c
+@@ -141,15 +141,25 @@ static void simulate_sched_quantum(void)
+ static inline int futex_wait_multiple( const struct futex_waitv *futexes,
+         int count, const struct timespec64 *end, clockid_t clock_id )
+ {
++#ifdef __linux__
+    if (end)
+         return syscall( __NR_futex_waitv, futexes, count, 0, end, clock_id );
+    else
+         return syscall( __NR_futex_waitv, futexes, count, 0, NULL, 0 );
++#else
++    errno = ENOSYS;
++    return -1;
++#endif
+ }
+ 
+ static inline int futex_wake( int *addr, int val )
+ {
++#ifdef __linux__
+     return syscall( __NR_futex, addr, 1, val, NULL, 0, 0 );
++#else
++    errno = ENOSYS;
++    return -1;
++#endif
+ }
+ 
+ struct fsync
+@@ -455,6 +465,11 @@ void fsync_init( DWORD pid )
+     struct stat st;
+ 
+ 
++#ifndef __linux__
++    ERR("WINEFSYNC is not supported on this platform.\n");
++    fsync_enabled = 0;
++    return;
++#else
+     fsync_enabled = 1;
+     syscall( __NR_futex_waitv, NULL, 0, 0, NULL, 0 );
+     if (errno == ENOSYS || errno == EPERM)
+@@ -462,6 +477,7 @@ void fsync_init( DWORD pid )
+         ERR("Server is running with WINEFSYNC but this process can't use __NR_futex_waitv.\n");
+         exit(1);
+     }
++#endif
+ 
+     if (stat( config_dir, &st ) == -1)
+         ERR("Cannot stat %s\n", config_dir);
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 4deeac79c28..bbb77814e51 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -38,7 +38,9 @@
+ #include <sys/mman.h>
+ #include <sys/wait.h>
+ #include <unistd.h>
+-#include <malloc.h>
++#ifdef __GLIBC__
++# include <malloc.h>
++#endif
+ #include <dlfcn.h>
+ #ifdef HAVE_PWD_H
+ # include <pwd.h>
+@@ -2450,7 +2452,9 @@ static void start_main_thread(void)
+     set_thread_teb( teb );
+ #endif
+ 
++#ifdef M_PERTURB
+     mallopt( M_PERTURB, 0xff );
++#endif
+     init_startup_info();
+     *(ULONG_PTR *)&peb->CloudFileFlags = get_image_address();
+     set_load_order_app_name( main_wargv[0] );
+@@ -2459,7 +2463,9 @@ static void start_main_thread(void)
+     load_ntdll();
+     load_wow64_ntdll( main_image_info.Machine );
+     load_apiset_dll();
++#ifdef M_PERTURB
+     mallopt( M_PERTURB, 0 );
++#endif
+     server_init_process_done();
+ }
+ 
+diff --git a/dlls/ntdll/unix/ntsync_tmp.h b/dlls/ntdll/unix/ntsync_tmp.h
+index 6d06793512b..15ee3000e7e 100644
+--- a/dlls/ntdll/unix/ntsync_tmp.h
++++ b/dlls/ntdll/unix/ntsync_tmp.h
+@@ -8,7 +8,17 @@
+ #ifndef __LINUX_NTSYNC_H
+ #define __LINUX_NTSYNC_H
+ 
++#include <sys/ioctl.h>
++
++#ifdef HAVE_LINUX_TYPES_H
++#include <linux/types.h>
++#elif defined(__linux__)
+ #include <linux/types.h>
++#else
++#include <stdint.h>
++typedef uint32_t __u32;
++typedef uint64_t __u64;
++#endif
+ 
+ struct ntsync_sem_args {
+ 	__u32 count;
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index 110404c274c..2620f699a56 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -2279,7 +2279,7 @@ __ASM_GLOBAL_FUNC( dump_syscall_fault_return,
+                    "movq %rdi,%rsp\n\t"
+                    "movq %rsi,%rax\n\t"
+                    "movq %rdx,%r13\n\t"
+-                   "jmp %rcx")
++                   "jmpq *%rcx")
+ 
+ 
+ static void dump_syscall_fault( CONTEXT *context, DWORD exc_code )
+@@ -3197,7 +3197,17 @@ void signal_init_process(void)
+ 
+ void set_thread_teb( TEB *teb )
+ {
++#if defined __linux__
+     arch_prctl( ARCH_SET_GS, teb );
++#elif defined (__FreeBSD__) || defined (__FreeBSD_kernel__)
++    amd64_set_gsbase( teb );
++#elif defined(__NetBSD__)
++    sysarch( X86_64_SET_GSBASE, &teb );
++#elif defined (__APPLE__)
++    _thread_set_tsd_base( (uint64_t)teb );
++#else
++# error Please define setting %gs for your architecture
++#endif
+ }
+ 
+ /***********************************************************************
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 74a0c93319c..1842db374ed 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -61,7 +61,9 @@
+ # include <sys/event.h>
+ #endif
+ 
++#ifdef __linux__
+ # include "ntsync_tmp.h"
++#endif
+ 
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index 1fe3081dfcd..23c0bac1ab0 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -765,8 +765,10 @@ void init_shared_data_cpuinfo( KUSER_SHARED_DATA *data )
+ 
+ #endif /* End architecture specific feature detection for CPUs */
+ 
++#ifdef __linux__
+ static void fill_performance_core_info(void);
+ static BOOL sysfs_parse_bitmap(const char *filename, ULONG_PTR *mask);
++#endif
+ 
+ void fill_cpu_override(void)
+ {
+@@ -832,8 +834,8 @@ void fill_cpu_override(void)
+             return;
+         }
+ 
++#ifdef __linux__
+         fill_performance_core_info();
+-
+         for (i = 0; i < host_cpu_count; ++i)
+         {
+             snprintf(name, sizeof(name), core_info, i, "thread_siblings");
+@@ -866,6 +868,13 @@ skip_cpu:
+             if (count == cpu_override.mapping.cpu_count) break;
+         }
+         assert( count == cpu_override.mapping.cpu_count );
++#else
++        for (i = 0; i < cpu_override.mapping.cpu_count; ++i)
++        {
++            cpu_override.mapping.host_cpu_id[i] = i;
++            cpu_override.siblings_mask[i] = (ULONG_PTR)1 << i;
++        }
++#endif
+         goto done;
+     }
+ 
+diff --git a/dlls/win32u/opengl.c b/dlls/win32u/opengl.c
+index d2b7413654b..b80867c4db9 100644
+--- a/dlls/win32u/opengl.c
++++ b/dlls/win32u/opengl.c
+@@ -1569,6 +1569,29 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
+ {
+ }
+ 
++static BOOL needs_framebuffer_surface( HWND hwnd )
++{
++    return FALSE;
++}
++
++static const struct opengl_drawable_funcs framebuffer_surface_funcs;
++
++struct framebuffer_surface
++{
++    struct opengl_drawable base;
++    struct opengl_drawable *target;
++};
++
++static inline struct framebuffer_surface *framebuffer_from_opengl_drawable( struct opengl_drawable *base )
++{
++    return NULL;
++}
++
++static inline struct opengl_drawable *framebuffer_surface_create( int format, struct client_surface *client, struct opengl_drawable *target )
++{
++    return NULL;
++}
++
+ #endif /* SONAME_LIBEGL */
+ 
+ static UINT read_drm_device_prop( const char *name, const char *prop )
+diff --git a/dlls/winegstreamer/media-converter/media-converter.h b/dlls/winegstreamer/media-converter/media-converter.h
+index d06534eb991..337e80033ec 100644
+--- a/dlls/winegstreamer/media-converter/media-converter.h
++++ b/dlls/winegstreamer/media-converter/media-converter.h
+@@ -29,6 +29,7 @@
+ #include <unistd.h>
+ #include <fcntl.h>
+ #include <sys/stat.h>
++#include <pthread.h>
+ 
+ #include "unix_private.h"
+ #include "wine/rbtree.h"
+diff --git a/loader/preloader_mac.c b/loader/preloader_mac.c
+index e35444fd133..1de2d93d172 100644
+--- a/loader/preloader_mac.c
++++ b/loader/preloader_mac.c
+@@ -326,17 +326,25 @@ __ASM_GLOBAL_FUNC( start,
+ #error preloader not implemented for this CPU
+ #endif
+ 
+-void wld_exit( int code ) __attribute__((noreturn));
+-SYSCALL_NOERR( wld_exit, 1 /* SYS_exit */ );
++void wld_exit( int code )
++{
++    exit( code );
++}
+ 
+-ssize_t wld_write( int fd, const void *buffer, size_t len );
+-SYSCALL_FUNC( wld_write, 4 /* SYS_write */ );
++ssize_t wld_write( int fd, const void *buffer, size_t len )
++{
++    return write( fd, buffer, len );
++}
+ 
+-void *wld_mmap( void *start, size_t len, int prot, int flags, int fd, off_t offset );
+-SYSCALL_FUNC( wld_mmap, 197 /* SYS_mmap */ );
++void *wld_mmap( void *start, size_t len, int prot, int flags, int fd, off_t offset )
++{
++    return mmap( start, len, prot, flags, fd, offset );
++}
+ 
+-void *wld_munmap( void *start, size_t len );
+-SYSCALL_FUNC( wld_munmap, 73 /* SYS_munmap */ );
++int wld_munmap( void *start, size_t len )
++{
++    return munmap( start, len );
++}
+ 
+ static intptr_t (*p_dyld_get_image_slide)( const struct target_mach_header* mh );
+ 
+diff --git a/loader64/Makefile.in b/loader64/Makefile.in
+index cfbe51d44d2..f924bdfd2c3 100644
+--- a/loader64/Makefile.in
++++ b/loader64/Makefile.in
+@@ -3,18 +3,23 @@ PARENTSRC = ../loader
+ SOURCES = \
+ 	main.c \
+ 	preloader.c \
+-	preloader_mac.c
++	preloader_mac.c \
++	wine_info.plist.in
+ 
+-PROGRAMS = wine64 wine64-preloader
+-INSTALL_LIB = wine64 wine64-preloader
++PROGRAMS = $(WINELOADER_PROGRAMS)
++INSTALL_LIB = $(WINELOADER_PROGRAMS)
+ UNIX_CFLAGS = -fPIE
+ 
+ preloader_EXTRADEFS = -fno-builtin
+ 
++wine_OBJS = main.o
++wine_DEPS = $(WINELOADER_DEPENDS)
++wine_LDFLAGS = $(WINELOADER_LDFLAGS) $(LDEXECFLAGS) $(PTHREAD_LIBS)
++
+ wine64_OBJS = main.o
+ wine64_DEPS = $(WINELOADER_DEPENDS)
+ wine64_LDFLAGS = $(WINELOADER_LDFLAGS) $(LDEXECFLAGS) $(PTHREAD_LIBS)
+ 
+-wine64_preloader_OBJS = preloader.o
++wine64_preloader_OBJS = preloader.o preloader_mac.o
+ wine64_preloader_DEPS = $(WINELOADER_DEPENDS)
+ wine64_preloader_LDFLAGS = $(WINEPRELOADER_LDFLAGS)
+diff --git a/server/fsync.c b/server/fsync.c
+index 7d3ec646f9e..362c4064a0c 100644
+--- a/server/fsync.c
++++ b/server/fsync.c
+@@ -310,7 +310,12 @@ int fsync_grab_shm_idx( unsigned int shm_idx )
+ 
+ static inline int futex_wake( int *addr, int val )
+ {
++#ifdef __linux__
+     return syscall( __NR_futex, addr, 1, val, NULL, 0, 0 );
++#else
++    errno = ENOSYS;
++    return -1;
++#endif
+ }
+ 
+ /* shm layout for events or event-like objects. */
+diff --git a/server/ntsync_tmp.h b/server/ntsync_tmp.h
+index 6d06793512b..15ee3000e7e 100644
+--- a/server/ntsync_tmp.h
++++ b/server/ntsync_tmp.h
+@@ -8,7 +8,17 @@
+ #ifndef __LINUX_NTSYNC_H
+ #define __LINUX_NTSYNC_H
+ 
++#include <sys/ioctl.h>
++
++#ifdef HAVE_LINUX_TYPES_H
++#include <linux/types.h>
++#elif defined(__linux__)
+ #include <linux/types.h>
++#else
++#include <stdint.h>
++typedef uint32_t __u32;
++typedef uint64_t __u64;
++#endif
+ 
+ struct ntsync_sem_args {
+ 	__u32 count;
+-- 
+2.50.1 (Apple Git-155)
+
