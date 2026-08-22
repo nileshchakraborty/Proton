@@ -43,7 +43,12 @@ fi
 
 # Argument parsing
 BUILD_NAME="$DEFAULT_BUILD_NAME"
-TARGET_ARCH="x86_64"
+HOST_UNAME="$(uname -m)"
+if [[ "$HOST_UNAME" == "arm64" || "$HOST_UNAME" == "aarch64" ]]; then
+  TARGET_ARCH="arm64"
+else
+  TARGET_ARCH="x86_64"
+fi
 DEPLOYMENT_TARGET="11.0"
 ENABLE_CCACHE="0"
 

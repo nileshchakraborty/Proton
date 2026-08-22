@@ -532,11 +532,12 @@ class Proton:
         self.wow64_pe_arch = "i386-windows"
 
         if os.environ.get("PROTON_USE_ARM64", "1") == "1" and \
-                platform.machine() == 'aarch64' and \
-                file_exists(self.path("files/bin-arm64/"), follow_symlinks=True):
+                platform.machine() in ('aarch64', 'arm64') and \
+                (file_exists(self.path("files/bin-arm64/"), follow_symlinks=True) or \
+                 file_exists(self.path("files/bin/"), follow_symlinks=True)):
             self.host_pe_arch = "aarch64-windows"
-            self.default_pfx_dir = self.path("files/share/default_pfx_arm64/")
-            self.bin_dir = self.path("files/bin-arm64/")
+            self.default_pfx_dir = self.path("files/share/default_pfx_arm64/") if file_exists(self.path("files/share/default_pfx_arm64/"), follow_symlinks=True) else self.path("files/share/default_pfx/")
+            self.bin_dir = self.path("files/bin-arm64/") if file_exists(self.path("files/bin-arm64/"), follow_symlinks=True) else self.path("files/bin/")
             self.wine_bin = self.bin_dir + "wine"
             self.wineserver_bin = self.bin_dir + "wineserver"
 
@@ -2015,7 +2016,7 @@ class Session:
                 s = dll + "=" + setting
         append_to_env_str(self.env, "WINEDLLOVERRIDES", s, ";")
 
-        if platform.machine() == 'aarch64':
+        if platform.machine() in ('aarch64', 'arm64'):
             if os.environ.get("SteamGameId", 0) == "1167630": # Teardown
                 # https://github.com/microsoft/mimalloc/issues/958
                 self.env["MIMALLOC_DISABLE_REDIRECT"] = "1"
