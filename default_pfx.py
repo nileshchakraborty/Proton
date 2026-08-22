@@ -117,6 +117,29 @@ def fixup_drive_links(default_pfx_dir):
             if ":" in dir_:
                 os.remove(os.path.join(walk_dir, dir_))
 
+def populate_fallback_symlinks(default_pfx_dir, dist_dir, arm64):
+    sys32_dir = os.path.join(default_pfx_dir, 'drive_c', 'windows', 'system32')
+    sys64_dir = os.path.join(default_pfx_dir, 'drive_c', 'windows', 'syswow64')
+    x86_64_lib = os.path.join(dist_dir, 'lib', 'wine', f'{"aarch64" if arm64 else "x86_64"}-windows')
+    i386_lib = os.path.join(dist_dir, 'lib', 'wine', 'i386-windows')
+
+    os.makedirs(sys32_dir, exist_ok=True)
+    os.makedirs(sys64_dir, exist_ok=True)
+
+    if os.path.isdir(x86_64_lib):
+        for f in os.listdir(x86_64_lib):
+            src = os.path.join(x86_64_lib, f)
+            dst = os.path.join(sys32_dir, f)
+            if os.path.isfile(src) and not os.path.exists(dst):
+                make_relative_symlink(src, dst)
+
+    if os.path.isdir(i386_lib):
+        for f in os.listdir(i386_lib):
+            src = os.path.join(i386_lib, f)
+            dst = os.path.join(sys64_dir, f)
+            if os.path.isfile(src) and not os.path.exists(dst):
+                make_relative_symlink(src, dst)
+
 def make_default_pfx(default_pfx_dir, dist_dir, arm64):
     local_env = dict(os.environ)
     libdir = dist_dir + '/lib/'
@@ -129,18 +152,24 @@ def make_default_pfx(default_pfx_dir, dist_dir, arm64):
     local_env["WINEDLLPATH"] = libdir + "vkd3d"
     runtime_args = []
 
-
     bin_dir = os.path.join(dist_dir, 'bin-arm64' if arm64 else 'bin')
-    subprocess.run(runtime_args + ["/bin/bash", "-c",
-        os.path.join(bin_dir, 'wine') + " wineboot && " +
-        os.path.join(bin_dir, 'wineserver') + " -w"],
+    try:
+        subprocess.run(runtime_args + ["/bin/bash", "-c",
+            os.path.join(bin_dir, 'wine') + " wineboot && " +
+            os.path.join(bin_dir, 'wineserver') + " -w"],
+            env=local_env, check=True)
+    except Exception as e:
+        populate_fallback_symlinks(default_pfx_dir, dist_dir, arm64)
 
-        env=local_env, check=True)
     setup_dll_symlinks(default_pfx_dir, dist_dir, arm64)
     fixup_drive_links(default_pfx_dir)
 
-    filter_registry(os.path.join(default_pfx_dir, 'user.reg'))
-    filter_registry(os.path.join(default_pfx_dir, 'system.reg'))
+    user_reg = os.path.join(default_pfx_dir, 'user.reg')
+    system_reg = os.path.join(default_pfx_dir, 'system.reg')
+    if os.path.isfile(user_reg):
+        filter_registry(user_reg)
+    if os.path.isfile(system_reg):
+        filter_registry(system_reg)
 
 if __name__ == '__main__':
     import sys

@@ -5,11 +5,13 @@ on:
     branches:
       - main
       - proton_*
+      - macos-rosetta2-support
       - 'feature/**'
   pull_request:
     branches:
       - main
       - proton_*
+      - macos-rosetta2-support
   workflow_dispatch:
 
 jobs:
